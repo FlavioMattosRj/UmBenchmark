@@ -326,6 +326,21 @@ function Import-CapturedEnvironment {
     }
 }
 
+function Close-RecentCmdConsoles {
+    param(
+        [int]$WithinSeconds = 2
+    )
+
+    $threshold = (Get-Date).AddSeconds(-$WithinSeconds)
+    $candidates = Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" |
+        Where-Object { $_.CreationDate -ge $threshold }
+
+    foreach ($proc in $candidates) {
+        Write-Host "Encerrando console de configuracao: PID $($proc.ProcessId) (criado em $($proc.CreationDate))"
+        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Initialize-BuildConfiguration {
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
@@ -350,6 +365,8 @@ function Initialize-BuildConfiguration {
 
     Remove-Item -LiteralPath $CapturedEnvFile -Force
     Write-Host "Arquivo de variaveis removido: $CapturedEnvFile"
+
+    Close-RecentCmdConsoles
 }
 
 function Write-Stage {
