@@ -19,3 +19,7 @@ Thumbs.db
 # Temp
 *.tmp
 *.bak
+
+# Saidas geradas pelas ferramentas auxiliares
+Ferramentas/VarAmb.txt
+**/.cachepacotes/
