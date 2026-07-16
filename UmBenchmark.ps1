@@ -9,7 +9,9 @@ param(
     [string]$RefsRoot,
 
     [Parameter(Mandatory)]
-    [string]$Source
+    [string]$Source,
+
+    [string]$ConfigCommand = "java `"$PSScriptRoot\Ferramentas\CriarVariaveisEAbrirConsole.java`""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -206,7 +208,145 @@ function Initialize-EnvironmentCopy {
     return $destination
 }
 
+function Invoke-BuildConfigTool {
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][string]$ConfigCommand
+    )
+
+    Write-Host "Configurando requisitos de build em: $ProjectRoot"
+    Write-Host "Comando: $ConfigCommand"
+
+    Push-Location -LiteralPath $ProjectRoot
+    try {
+        Invoke-Expression $ConfigCommand
+    } finally {
+        Pop-Location
+    }
+}
+
+function Set-CmdAutoRun {
+    param(
+        [Parameter(Mandatory)][string]$Command
+    )
+
+    $keyPath = 'HKCU:\Software\Microsoft\Command Processor'
+    $keyCreated = -not (Test-Path $keyPath)
+
+    if ($keyCreated) {
+        New-Item -Path $keyPath -Force | Out-Null
+    }
+
+    $previousValue = (Get-ItemProperty -Path $keyPath -Name 'AutoRun' -ErrorAction SilentlyContinue).AutoRun
+
+    Set-ItemProperty -Path $keyPath -Name 'AutoRun' -Value $Command
+
+    return [pscustomobject]@{
+        KeyCreated    = $keyCreated
+        PreviousValue = $previousValue
+    }
+}
+
+function Restore-CmdAutoRun {
+    param(
+        [Parameter(Mandatory)][pscustomobject]$PreviousState
+    )
+
+    $keyPath = 'HKCU:\Software\Microsoft\Command Processor'
+
+    if ($PreviousState.KeyCreated) {
+        Remove-Item -Path $keyPath -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    if ($null -eq $PreviousState.PreviousValue) {
+        Remove-ItemProperty -Path $keyPath -Name 'AutoRun' -ErrorAction SilentlyContinue
+    } else {
+        Set-ItemProperty -Path $keyPath -Name 'AutoRun' -Value $PreviousState.PreviousValue
+    }
+}
+
+function Wait-ForFileReady {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [int]$TimeoutSeconds = 60,
+        [int]$PollMilliseconds = 200
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+
+    while (-not (Test-Path -LiteralPath $Path)) {
+        if ((Get-Date) -gt $deadline) {
+            throw "Tempo esgotado aguardando o arquivo: $Path"
+        }
+        Start-Sleep -Milliseconds $PollMilliseconds
+    }
+
+    while ($true) {
+        try {
+            $stream = [System.IO.File]::Open($Path, 'Open', 'Read', 'None')
+            $stream.Close()
+            return
+        } catch {
+            if ((Get-Date) -gt $deadline) {
+                throw "Tempo esgotado aguardando liberacao do arquivo: $Path"
+            }
+            Start-Sleep -Milliseconds $PollMilliseconds
+        }
+    }
+}
+
+function Import-CapturedEnvironment {
+    param(
+        [Parameter(Mandatory)][string]$Path
+    )
+
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        $separatorIndex = $line.IndexOf('=')
+        if ($separatorIndex -le 0) {
+            continue
+        }
+
+        $name = $line.Substring(0, $separatorIndex)
+        $value = $line.Substring($separatorIndex + 1)
+
+        Set-Item -Path "Env:$name" -Value $value
+    }
+}
+
+function Initialize-BuildConfiguration {
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][string]$ConfigCommand
+    )
+
+    $autoRunTool = Join-Path $PSScriptRoot 'Ferramentas\DescarregarVariaveis.cmd'
+    $capturedEnvFile = Join-Path $PSScriptRoot 'Ferramentas\VarAmb.txt'
+
+    $previousAutoRun = Set-CmdAutoRun -Command "`"$autoRunTool`""
+
+    Invoke-BuildConfigTool -ProjectRoot $ProjectRoot -ConfigCommand $ConfigCommand
+
+    Wait-ForFileReady -Path $capturedEnvFile
+    Restore-CmdAutoRun -PreviousState $previousAutoRun
+    Import-CapturedEnvironment -Path $capturedEnvFile
+    Remove-Item -LiteralPath $capturedEnvFile -Force
+
+    Write-Host "Variaveis de ambiente absorvidas de: $capturedEnvFile"
+}
+
+function Write-Stage {
+    param(
+        [Parameter(Mandatory)][string]$Message
+    )
+
+    Write-Host ''
+    Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
 # --- Orquestracao ---
+
+Write-Stage 'Validando parametros e origem'
 
 $resolvedNtfsRoot = Assert-DirectoryRoot -Path $NtfsRoot -Label 'Raiz NTFS'
 $resolvedRefsRoot = Assert-DirectoryRoot -Path $RefsRoot -Label 'Raiz ReFS'
@@ -216,9 +356,14 @@ Write-BenchmarkHeader -NtfsRoot $resolvedNtfsRoot -RefsRoot $resolvedRefsRoot -S
 
 $projectName = Get-ProjectName -SourceInfo $sourceInfo
 
+Write-Stage 'Criando diretorios de build'
+
 $envAPath = Initialize-EnvironmentCopy -Root $resolvedNtfsRoot -SourceInfo $sourceInfo -ProjectName $projectName -Label 'A (NTFS)'
 $envBPath = Initialize-EnvironmentCopy -Root $resolvedRefsRoot -SourceInfo $sourceInfo -ProjectName $projectName -Label 'B (ReFS)'
 
-Write-Host ''
-Write-Host "Ambiente A (NTFS): $envAPath" -ForegroundColor Yellow
-Write-Host "Ambiente B (ReFS): $envBPath" -ForegroundColor Yellow
+Write-Host "Ambiente A (NTFS): $envAPath"
+Write-Host "Ambiente B (ReFS): $envBPath"
+
+Write-Stage 'Configurando o ambiente de build'
+
+Initialize-BuildConfiguration -ProjectRoot $envAPath -ConfigCommand $ConfigCommand
