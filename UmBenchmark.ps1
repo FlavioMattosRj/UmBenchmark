@@ -306,13 +306,28 @@ function Import-CapturedEnvironment {
     )
 
     foreach ($line in Get-Content -LiteralPath $Path -Encoding OEM) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
         $separatorIndex = $line.IndexOf('=')
         if ($separatorIndex -le 0) {
+            Write-Host "Linha ignorada (sem '='): $line" -ForegroundColor DarkYellow
             continue
         }
 
         $name = $line.Substring(0, $separatorIndex)
         $value = $line.Substring($separatorIndex + 1)
+
+        if ($name -notmatch '^[^\x00-\x1f:]+$') {
+            Write-Host "Linha ignorada (nome de variavel invalido): $line" -ForegroundColor DarkYellow
+            continue
+        }
+
+        if ([string]::IsNullOrEmpty($value)) {
+            Write-Host "Linha ignorada (sem valor): $name" -ForegroundColor DarkYellow
+            continue
+        }
 
         $previousValue = [System.Environment]::GetEnvironmentVariable($name, 'Process')
 
