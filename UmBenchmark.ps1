@@ -16,6 +16,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$AutoRunToolPath = Join-Path $PSScriptRoot 'Ferramentas\DescarregarVariaveis.cmd'
+$CapturedEnvFilePath = Join-Path $PSScriptRoot 'Ferramentas\VarAmb.txt'
+$script:CurrentStage = 'Inicializacao'
+
 function Assert-DirectoryRoot {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -312,9 +316,10 @@ function Import-CapturedEnvironment {
 
         $previousValue = [System.Environment]::GetEnvironmentVariable($name, 'Process')
 
-        if ($previousValue -ne $value) {
-            $previousDisplay = if ($null -eq $previousValue) { '(nao definida)' } else { "'$previousValue'" }
-            Write-Host "Variavel alterada: $name = $previousDisplay -> '$value'"
+        if ($null -eq $previousValue) {
+            Write-Host "Variavel nova: $name = '$value'"
+        } elseif ($previousValue -ne $value) {
+            Write-Host "Variavel alterada: $name = '$previousValue' -> '$value'"
         }
 
         Set-Item -Path "Env:$name" -Value $value
@@ -324,28 +329,27 @@ function Import-CapturedEnvironment {
 function Initialize-BuildConfiguration {
     param(
         [Parameter(Mandatory)][string]$ProjectRoot,
-        [Parameter(Mandatory)][string]$ConfigCommand
+        [Parameter(Mandatory)][string]$ConfigCommand,
+        [Parameter(Mandatory)][string]$AutoRunToolPath,
+        [Parameter(Mandatory)][string]$CapturedEnvFile
     )
 
-    $autoRunTool = Join-Path $PSScriptRoot 'Ferramentas\DescarregarVariaveis.cmd'
-    $capturedEnvFile = Join-Path $PSScriptRoot 'Ferramentas\VarAmb.txt'
-
-    $previousAutoRun = Set-CmdAutoRun -Command "`"$autoRunTool`""
+    $previousAutoRun = Set-CmdAutoRun -Command "`"$AutoRunToolPath`""
 
     try {
         Invoke-BuildConfigTool -ProjectRoot $ProjectRoot -ConfigCommand $ConfigCommand
-        Wait-ForFileReady -Path $capturedEnvFile
+        Wait-ForFileReady -Path $CapturedEnvFile
     } finally {
         Restore-CmdAutoRun -PreviousState $previousAutoRun
     }
 
-    $lineCount = (Get-Content -LiteralPath $capturedEnvFile -Encoding OEM | Measure-Object).Count
-    Write-Host "Arquivo de variaveis gerado: $capturedEnvFile ($lineCount linhas)"
+    $lineCount = (Get-Content -LiteralPath $CapturedEnvFile -Encoding OEM | Measure-Object).Count
+    Write-Host "Arquivo de variaveis gerado: $CapturedEnvFile ($lineCount linhas)"
 
-    Import-CapturedEnvironment -Path $capturedEnvFile
+    Import-CapturedEnvironment -Path $CapturedEnvFile
 
-    Remove-Item -LiteralPath $capturedEnvFile -Force
-    Write-Host "Arquivo de variaveis removido: $capturedEnvFile"
+    Remove-Item -LiteralPath $CapturedEnvFile -Force
+    Write-Host "Arquivo de variaveis removido: $CapturedEnvFile"
 }
 
 function Write-Stage {
@@ -353,30 +357,70 @@ function Write-Stage {
         [Parameter(Mandatory)][string]$Message
     )
 
+    $script:CurrentStage = $Message
+
     Write-Host ''
     Write-Host "==> $Message" -ForegroundColor Cyan
 }
 
+function Write-BenchmarkError {
+    param(
+        [Parameter(Mandatory)][string]$Stage,
+        [Parameter(Mandatory)]$ErrorRecord
+    )
+
+    Write-Host ''
+    Write-Host "ERRO na etapa '$Stage': $($ErrorRecord.Exception.Message)" -ForegroundColor Red
+}
+
+function Invoke-EmergencyCleanup {
+    param(
+        [Parameter(Mandatory)][string]$AutoRunToolPath,
+        [Parameter(Mandatory)][string]$CapturedEnvFile
+    )
+
+    $keyPath = 'HKCU:\Software\Microsoft\Command Processor'
+    $expectedAutoRun = "`"$AutoRunToolPath`""
+    $currentAutoRun = (Get-ItemProperty -Path $keyPath -Name 'AutoRun' -ErrorAction SilentlyContinue).AutoRun
+
+    if ($currentAutoRun -eq $expectedAutoRun) {
+        Remove-ItemProperty -Path $keyPath -Name 'AutoRun' -ErrorAction SilentlyContinue
+        Write-Host "Limpeza de emergencia: entrada AutoRun removida." -ForegroundColor Yellow
+    }
+
+    if (Test-Path -LiteralPath $CapturedEnvFile) {
+        Remove-Item -LiteralPath $CapturedEnvFile -Force -ErrorAction SilentlyContinue
+        Write-Host "Limpeza de emergencia: arquivo temporario removido ($CapturedEnvFile)." -ForegroundColor Yellow
+    }
+}
+
 # --- Orquestracao ---
 
-Write-Stage 'Validando parametros e origem'
+try {
+    Write-Stage 'Validando parametros e origem'
 
-$resolvedNtfsRoot = Assert-DirectoryRoot -Path $NtfsRoot -Label 'Raiz NTFS'
-$resolvedRefsRoot = Assert-DirectoryRoot -Path $RefsRoot -Label 'Raiz ReFS'
-$sourceInfo = Resolve-SourceItem -Path $Source
+    $resolvedNtfsRoot = Assert-DirectoryRoot -Path $NtfsRoot -Label 'Raiz NTFS'
+    $resolvedRefsRoot = Assert-DirectoryRoot -Path $RefsRoot -Label 'Raiz ReFS'
+    $sourceInfo = Resolve-SourceItem -Path $Source
 
-Write-BenchmarkHeader -NtfsRoot $resolvedNtfsRoot -RefsRoot $resolvedRefsRoot -SourceInfo $sourceInfo
+    Write-BenchmarkHeader -NtfsRoot $resolvedNtfsRoot -RefsRoot $resolvedRefsRoot -SourceInfo $sourceInfo
 
-$projectName = Get-ProjectName -SourceInfo $sourceInfo
+    $projectName = Get-ProjectName -SourceInfo $sourceInfo
 
-Write-Stage 'Criando diretorios de build'
+    Write-Stage 'Criando diretorios de build'
 
-$envAPath = Initialize-EnvironmentCopy -Root $resolvedNtfsRoot -SourceInfo $sourceInfo -ProjectName $projectName -Label 'A (NTFS)'
-$envBPath = Initialize-EnvironmentCopy -Root $resolvedRefsRoot -SourceInfo $sourceInfo -ProjectName $projectName -Label 'B (ReFS)'
+    $envAPath = Initialize-EnvironmentCopy -Root $resolvedNtfsRoot -SourceInfo $sourceInfo -ProjectName $projectName -Label 'A (NTFS)'
+    $envBPath = Initialize-EnvironmentCopy -Root $resolvedRefsRoot -SourceInfo $sourceInfo -ProjectName $projectName -Label 'B (ReFS)'
 
-Write-Host "Ambiente A (NTFS): $envAPath"
-Write-Host "Ambiente B (ReFS): $envBPath"
+    Write-Host "Ambiente A (NTFS): $envAPath"
+    Write-Host "Ambiente B (ReFS): $envBPath"
 
-Write-Stage 'Configurando o ambiente de build'
+    Write-Stage 'Configurando o ambiente de build'
 
-Initialize-BuildConfiguration -ProjectRoot $envAPath -ConfigCommand $ConfigCommand
+    Initialize-BuildConfiguration -ProjectRoot $envAPath -ConfigCommand $ConfigCommand -AutoRunToolPath $AutoRunToolPath -CapturedEnvFile $CapturedEnvFilePath
+}
+catch {
+    Write-BenchmarkError -Stage $script:CurrentStage -ErrorRecord $_
+    Invoke-EmergencyCleanup -AutoRunToolPath $AutoRunToolPath -CapturedEnvFile $CapturedEnvFilePath
+    exit 1
+}
