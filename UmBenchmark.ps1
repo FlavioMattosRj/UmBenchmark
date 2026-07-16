@@ -363,9 +363,6 @@ function Initialize-BuildConfiguration {
 
     Import-CapturedEnvironment -Path $CapturedEnvFile
 
-    Remove-Item -LiteralPath $CapturedEnvFile -Force
-    Write-Host "Arquivo de variaveis removido: $CapturedEnvFile"
-
     Close-RecentCmdConsoles
 }
 
@@ -406,8 +403,7 @@ function Invoke-EmergencyCleanup {
     }
 
     if (Test-Path -LiteralPath $CapturedEnvFile) {
-        Remove-Item -LiteralPath $CapturedEnvFile -Force -ErrorAction SilentlyContinue
-        Write-Host "Limpeza de emergencia: arquivo temporario removido ($CapturedEnvFile)." -ForegroundColor Yellow
+        Write-Host "Arquivo de variaveis mantido para depuracao: $CapturedEnvFile" -ForegroundColor Yellow
     }
 }
 
@@ -435,6 +431,9 @@ try {
     Write-Stage 'Configurando o ambiente de build'
 
     Initialize-BuildConfiguration -ProjectRoot $envAPath -ConfigCommand $ConfigCommand -AutoRunToolPath $AutoRunToolPath -CapturedEnvFile $CapturedEnvFilePath
+
+    Remove-Item -LiteralPath $CapturedEnvFilePath -Force
+    Write-Host "Arquivo de variaveis removido: $CapturedEnvFilePath"
 }
 catch {
     Write-BenchmarkError -Stage $script:CurrentStage -ErrorRecord $_
