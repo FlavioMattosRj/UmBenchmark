@@ -1,0 +1,21 @@
+# PowerShell
+*.psd1
+!src/*.psd1
+*.psm1
+!src/*.psm1
+
+# Build/test output
+coverage.xml
+TestResults.xml
+*.log
+
+# VS Code
+.vscode/*.code-workspace
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Temp
+*.tmp
+*.bak
