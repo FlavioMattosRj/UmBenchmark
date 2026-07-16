@@ -301,7 +301,7 @@ function Import-CapturedEnvironment {
         [Parameter(Mandatory)][string]$Path
     )
 
-    foreach ($line in Get-Content -LiteralPath $Path) {
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding OEM) {
         $separatorIndex = $line.IndexOf('=')
         if ($separatorIndex -le 0) {
             continue
@@ -309,6 +309,13 @@ function Import-CapturedEnvironment {
 
         $name = $line.Substring(0, $separatorIndex)
         $value = $line.Substring($separatorIndex + 1)
+
+        $previousValue = [System.Environment]::GetEnvironmentVariable($name, 'Process')
+
+        if ($previousValue -ne $value) {
+            $previousDisplay = if ($null -eq $previousValue) { '(nao definida)' } else { "'$previousValue'" }
+            Write-Host "Variavel alterada: $name = $previousDisplay -> '$value'"
+        }
 
         Set-Item -Path "Env:$name" -Value $value
     }
@@ -325,14 +332,20 @@ function Initialize-BuildConfiguration {
 
     $previousAutoRun = Set-CmdAutoRun -Command "`"$autoRunTool`""
 
-    Invoke-BuildConfigTool -ProjectRoot $ProjectRoot -ConfigCommand $ConfigCommand
+    try {
+        Invoke-BuildConfigTool -ProjectRoot $ProjectRoot -ConfigCommand $ConfigCommand
+        Wait-ForFileReady -Path $capturedEnvFile
+    } finally {
+        Restore-CmdAutoRun -PreviousState $previousAutoRun
+    }
 
-    Wait-ForFileReady -Path $capturedEnvFile
-    Restore-CmdAutoRun -PreviousState $previousAutoRun
+    $lineCount = (Get-Content -LiteralPath $capturedEnvFile -Encoding OEM | Measure-Object).Count
+    Write-Host "Arquivo de variaveis gerado: $capturedEnvFile ($lineCount linhas)"
+
     Import-CapturedEnvironment -Path $capturedEnvFile
-    Remove-Item -LiteralPath $capturedEnvFile -Force
 
-    Write-Host "Variaveis de ambiente absorvidas de: $capturedEnvFile"
+    Remove-Item -LiteralPath $capturedEnvFile -Force
+    Write-Host "Arquivo de variaveis removido: $capturedEnvFile"
 }
 
 function Write-Stage {
