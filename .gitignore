@@ -26,3 +26,7 @@ Ferramentas/VarAmb.txt
 
 # Resultados de benchmark
 /Resultados/
+
+# Fonte padrao (clonada/zipada sob demanda quando -Source nao e informado)
+Ferramentas/FamTask.zip
+Ferramentas/FamTask/

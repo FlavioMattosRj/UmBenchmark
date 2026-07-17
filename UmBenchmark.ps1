@@ -8,8 +8,7 @@ param(
     [Parameter(Mandatory)]
     [string]$RefsRoot,
 
-    [Parameter(Mandatory)]
-    [string]$Source,
+    [string]$Source = '',
 
     [string]$ConfigCommand = "java `"$PSScriptRoot\Ferramentas\CriarVariaveisEAbrirConsole.java`"",
 
@@ -66,11 +65,45 @@ function Resolve-SourceItem {
     throw "Origem nao encontrada: $Path"
 }
 
+function Get-DefaultSource {
+    $zipPath = Join-Path $PSScriptRoot 'Ferramentas\FamTask.zip'
+
+    if (Test-Path -LiteralPath $zipPath) {
+        return $zipPath
+    }
+
+    Write-Host "Origem nao informada. Preparando fonte padrao (FamTask)..." -ForegroundColor Blue
+
+    $clonePath = Join-Path $PSScriptRoot 'Ferramentas\FamTask'
+
+    if (Test-Path -LiteralPath $clonePath) {
+        Remove-Item -LiteralPath $clonePath -Recurse -Force
+    }
+
+    git clone https://github.com/FlavioMattosRj/FamTask.git $clonePath
+
+    $itemsToZip = Get-ChildItem -LiteralPath $clonePath -Force |
+        Where-Object { $_.Name -ne '.git' } |
+        Select-Object -ExpandProperty FullName
+
+    Compress-Archive -Path $itemsToZip -DestinationPath $zipPath -Force
+
+    Remove-Item -LiteralPath $clonePath -Recurse -Force
+
+    Write-Host "Fonte padrao preparada em: $zipPath" -ForegroundColor Blue
+
+    return $zipPath
+}
+
 function Write-BenchmarkHeader {
     param(
         [Parameter(Mandatory)][string]$NtfsRoot,
         [Parameter(Mandatory)][string]$RefsRoot,
-        [Parameter(Mandatory)][pscustomobject]$SourceInfo
+        [Parameter(Mandatory)][pscustomobject]$SourceInfo,
+        [Parameter(Mandatory)][string]$ConfigCommand,
+        [Parameter(Mandatory)][int]$Iterations,
+        [Parameter(Mandatory)][string]$BuildCommand,
+        [Parameter(Mandatory)][bool]$ShowBuildOutput
     )
 
     Write-Host "Benchmark de Builds entre particao NTFS e Dev Drive (ReFS)" -ForegroundColor Cyan
@@ -78,6 +111,10 @@ function Write-BenchmarkHeader {
     Write-Host "Raiz NTFS: $NtfsRoot" -ForegroundColor Blue
     Write-Host "Raiz ReFS: $RefsRoot" -ForegroundColor Blue
     Write-Host "Origem ($($SourceInfo.Type)): $($SourceInfo.Path)" -ForegroundColor Blue
+    Write-Host "Comando de configuracao: $ConfigCommand" -ForegroundColor Blue
+    Write-Host "Iteracoes medidas: $Iterations" -ForegroundColor Blue
+    Write-Host "Comando de build: $BuildCommand" -ForegroundColor Blue
+    Write-Host "Mostrar saida do build: $ShowBuildOutput" -ForegroundColor Blue
 }
 
 function Get-ZipTopLevelFolder {
@@ -660,9 +697,14 @@ try {
 
     $resolvedNtfsRoot = Assert-DirectoryRoot -Path $NtfsRoot -Label 'Raiz NTFS'
     $resolvedRefsRoot = Assert-DirectoryRoot -Path $RefsRoot -Label 'Raiz ReFS'
+
+    if ([string]::IsNullOrWhiteSpace($Source)) {
+        $Source = Get-DefaultSource
+    }
+
     $sourceInfo = Resolve-SourceItem -Path $Source
 
-    Write-BenchmarkHeader -NtfsRoot $resolvedNtfsRoot -RefsRoot $resolvedRefsRoot -SourceInfo $sourceInfo
+    Write-BenchmarkHeader -NtfsRoot $resolvedNtfsRoot -RefsRoot $resolvedRefsRoot -SourceInfo $sourceInfo -ConfigCommand $ConfigCommand -Iterations $Iterations -BuildCommand $BuildCommand -ShowBuildOutput ([bool]$ShowBuildOutput)
 
     $projectName = Get-ProjectName -SourceInfo $sourceInfo
 
