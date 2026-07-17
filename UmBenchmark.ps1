@@ -74,10 +74,10 @@ function Write-BenchmarkHeader {
     )
 
     Write-Host "Benchmark de Builds entre particao NTFS e Dev Drive (ReFS)" -ForegroundColor Cyan
-    Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
-    Write-Host "Raiz NTFS: $NtfsRoot"
-    Write-Host "Raiz ReFS: $RefsRoot"
-    Write-Host "Origem ($($SourceInfo.Type)): $($SourceInfo.Path)"
+    Write-Host "PowerShell: $($PSVersionTable.PSVersion)" -ForegroundColor Blue
+    Write-Host "Raiz NTFS: $NtfsRoot" -ForegroundColor Blue
+    Write-Host "Raiz ReFS: $RefsRoot" -ForegroundColor Blue
+    Write-Host "Origem ($($SourceInfo.Type)): $($SourceInfo.Path)" -ForegroundColor Blue
 }
 
 function Get-ZipTopLevelFolder {
@@ -206,7 +206,7 @@ function Initialize-EnvironmentCopy {
     )
 
     $destination = Join-Path $Root $ProjectName
-    Write-Host "Preparando copia $Label em: $destination"
+    Write-Host "Preparando copia $Label em: $destination" -ForegroundColor Blue
 
     $destination = New-CleanDirectory -Path $destination
 
@@ -225,8 +225,8 @@ function Invoke-BuildConfigTool {
         [Parameter(Mandatory)][string]$ConfigCommand
     )
 
-    Write-Host "Configurando requisitos de build em: $ProjectRoot"
-    Write-Host "Comando: $ConfigCommand"
+    Write-Host "Configurando requisitos de build em: $ProjectRoot" -ForegroundColor Blue
+    Write-Host "Comando: $ConfigCommand" -ForegroundColor Blue
 
     Push-Location -LiteralPath $ProjectRoot
     try {
@@ -307,6 +307,18 @@ function Wait-ForFileReady {
     }
 }
 
+function Format-DisplayValue {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Value
+    )
+
+    if ($Value.Length -le 80) {
+        return $Value
+    }
+
+    return "$($Value.Substring(0, 30)) (...)"
+}
+
 function Import-CapturedEnvironment {
     param(
         [Parameter(Mandatory)][string]$Path
@@ -341,9 +353,9 @@ function Import-CapturedEnvironment {
         $previousValue = [System.Environment]::GetEnvironmentVariable($name, 'Process')
 
         if ($null -eq $previousValue) {
-            Write-Host "Variavel nova: $name = '$value'"
+            Write-Host "Variavel nova: $name = '$(Format-DisplayValue $value)'" -ForegroundColor Blue
         } elseif ($previousValue -ne $value) {
-            Write-Host "Variavel alterada: $name = '$previousValue' -> '$value'"
+            Write-Host "Variavel alterada: $name = '$(Format-DisplayValue $previousValue)' -> '$(Format-DisplayValue $value)'" -ForegroundColor Blue
         }
 
         Set-Item -Path "Env:$name" -Value $value
@@ -360,7 +372,7 @@ function Close-RecentCmdConsoles {
         Where-Object { $_.CreationDate -ge $threshold }
 
     foreach ($proc in $candidates) {
-        Write-Host "Encerrando console de configuracao: PID $($proc.ProcessId) (criado em $($proc.CreationDate))"
+        Write-Host "Encerrando console de configuracao: PID $($proc.ProcessId) (criado em $($proc.CreationDate))" -ForegroundColor Blue
         Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
     }
 }
@@ -383,14 +395,14 @@ function Initialize-BuildConfiguration {
     }
 
     $lineCount = (Get-Content -LiteralPath $CapturedEnvFile -Encoding OEM | Measure-Object).Count
-    Write-Host "Arquivo de variaveis gerado: $CapturedEnvFile ($lineCount linhas)"
+    Write-Host "Arquivo de variaveis gerado: $CapturedEnvFile ($lineCount linhas)" -ForegroundColor Blue
 
     Import-CapturedEnvironment -Path $CapturedEnvFile
 
     Close-RecentCmdConsoles
 
     Remove-Item -LiteralPath $CapturedEnvFile -Force
-    Write-Host "Arquivo de variaveis removido: $CapturedEnvFile"
+    Write-Host "Arquivo de variaveis removido: $CapturedEnvFile" -ForegroundColor Blue
 }
 
 function Write-Stage {
@@ -477,18 +489,24 @@ function Invoke-ProjectBuild {
 
     Initialize-PackageCacheRedirection -ProjectPath $ProjectPath
 
-    Write-Host "`tBuild: $ProjectPath"
+    Write-Host "`tBuild: $ProjectPath" -ForegroundColor Blue
 
-    Push-Location -LiteralPath $ProjectPath
-    try {
-        if ($ShowBuildOutput) {
-            Invoke-Expression $BuildCommand | Write-Host
-        } else {
-            Invoke-Expression $BuildCommand | Out-Null
+    $elapsed = Measure-Command {
+        Push-Location -LiteralPath $ProjectPath
+        try {
+            if ($ShowBuildOutput) {
+                Invoke-Expression $BuildCommand | Write-Host
+            } else {
+                Invoke-Expression $BuildCommand | Out-Null
+            }
+        } finally {
+            Pop-Location
         }
-    } finally {
-        Pop-Location
     }
+
+    Write-Host "`tBuild concluido com sucesso em $([math]::Round($elapsed.TotalSeconds, 2)) s" -ForegroundColor Blue
+
+    return $elapsed
 }
 
 function Save-BenchmarkResults {
@@ -506,7 +524,7 @@ function Save-BenchmarkResults {
 
     $Samples | Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8
 
-    Write-Host "Resultados salvos em: $csvPath"
+    Write-Host "Resultados salvos em: $csvPath" -ForegroundColor Blue
 
     return $csvPath
 }
@@ -521,27 +539,41 @@ function Invoke-Benchmark {
         [switch]$ShowBuildOutput
     )
 
-    Write-Host "Warmup: preenchendo caches de dependencias em cada ambiente..."
-    Invoke-ProjectBuild -ProjectPath $EnvAPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput
-    Invoke-ProjectBuild -ProjectPath $EnvBPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput
+    Write-Host "Warmup: preenchendo caches de dependencias em cada ambiente..." -ForegroundColor Blue
 
-    $samples = for ($i = 1; $i -le $Iterations; $i++) {
-        Write-Host "Iteracao $i de $Iterations"
-
-        $elapsedA = Measure-Command { Invoke-ProjectBuild -ProjectPath $EnvAPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput }
+    $samples = @(
+        $warmupA = Invoke-ProjectBuild -ProjectPath $EnvAPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput
         [pscustomobject]@{
             Ambiente = 'A (NTFS)'
-            Iteracao = $i
-            Millis   = [math]::Round($elapsedA.TotalMilliseconds, 2)
+            Rodada   = 'Warmup'
+            Segundos = [math]::Round($warmupA.TotalSeconds, 2)
         }
 
-        $elapsedB = Measure-Command { Invoke-ProjectBuild -ProjectPath $EnvBPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput }
+        $warmupB = Invoke-ProjectBuild -ProjectPath $EnvBPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput
         [pscustomobject]@{
             Ambiente = 'B (ReFS)'
-            Iteracao = $i
-            Millis   = [math]::Round($elapsedB.TotalMilliseconds, 2)
+            Rodada   = 'Warmup'
+            Segundos = [math]::Round($warmupB.TotalSeconds, 2)
         }
-    }
+
+        for ($i = 1; $i -le $Iterations; $i++) {
+            Write-Host "Iteracao $i de $Iterations" -ForegroundColor Blue
+
+            $elapsedA = Invoke-ProjectBuild -ProjectPath $EnvAPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput
+            [pscustomobject]@{
+                Ambiente = 'A (NTFS)'
+                Rodada   = $i
+                Segundos = [math]::Round($elapsedA.TotalSeconds, 2)
+            }
+
+            $elapsedB = Invoke-ProjectBuild -ProjectPath $EnvBPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput
+            [pscustomobject]@{
+                Ambiente = 'B (ReFS)'
+                Rodada   = $i
+                Segundos = [math]::Round($elapsedB.TotalSeconds, 2)
+            }
+        }
+    )
 
     $csvPath = Save-BenchmarkResults -Samples $samples -ResultsFolder $ResultsFolder
 
@@ -557,20 +589,68 @@ function Show-BenchmarkSummary {
     )
 
     Write-Host ''
-    Write-Host 'Resumo do benchmark:' -ForegroundColor Green
+    Write-Host 'Medicoes individuais (warmup e iteracoes):' -ForegroundColor Blue
 
-    $Samples | Group-Object Ambiente | ForEach-Object {
-        $stats = $_.Group.Millis | Measure-Object -Average -Minimum -Maximum -StandardDeviation
+    $Samples | Format-Table -AutoSize
+
+    Write-Host ''
+    Write-Host 'Resumo do benchmark:' -ForegroundColor Blue
+
+    $Samples | Where-Object { $_.Rodada -ne 'Warmup' } | Group-Object Ambiente | ForEach-Object {
+        $stats = $_.Group.Segundos | Measure-Object -Average -Minimum -Maximum -StandardDeviation
 
         [pscustomobject]@{
-            Ambiente        = $_.Name
-            Iteracoes       = $_.Group.Count
-            MediaMs         = [math]::Round($stats.Average, 2)
-            DesvioPadraoMs  = [math]::Round($stats.StandardDeviation, 2)
-            MinimoMs        = [math]::Round($stats.Minimum, 2)
-            MaximoMs        = [math]::Round($stats.Maximum, 2)
+            Ambiente             = $_.Name
+            Iteracoes            = $_.Group.Count
+            MediaSegundos        = [math]::Round($stats.Average, 2)
+            DesvioPadraoSegundos = [math]::Round($stats.StandardDeviation, 2)
+            MinimoSegundos       = [math]::Round($stats.Minimum, 2)
+            MaximoSegundos       = [math]::Round($stats.Maximum, 2)
         }
     } | Format-Table -AutoSize
+}
+
+function Get-FasterEnvironment {
+    param(
+        [Parameter(Mandatory)][double]$SecondsA,
+        [Parameter(Mandatory)][double]$SecondsB
+    )
+
+    if ($SecondsA -le $SecondsB) {
+        $faster = 'A (NTFS)'
+        $fasterTime = $SecondsA
+        $slowerTime = $SecondsB
+    } else {
+        $faster = 'B (ReFS)'
+        $fasterTime = $SecondsB
+        $slowerTime = $SecondsA
+    }
+
+    $percentFaster = if ($slowerTime -eq 0) { 0 } else { [math]::Round((($slowerTime - $fasterTime) / $slowerTime) * 100, 2) }
+
+    return [pscustomobject]@{
+        Faster        = $faster
+        PercentFaster = $percentFaster
+    }
+}
+
+function Write-BenchmarkConclusion {
+    param(
+        [Parameter(Mandatory)][object[]]$Samples
+    )
+
+    $warmupA = ($Samples | Where-Object { $_.Ambiente -eq 'A (NTFS)' -and $_.Rodada -eq 'Warmup' }).Segundos
+    $warmupB = ($Samples | Where-Object { $_.Ambiente -eq 'B (ReFS)' -and $_.Rodada -eq 'Warmup' }).Segundos
+    $warmupResult = Get-FasterEnvironment -SecondsA $warmupA -SecondsB $warmupB
+
+    $medicoes = $Samples | Where-Object { $_.Rodada -ne 'Warmup' }
+    $mediaA = ($medicoes | Where-Object { $_.Ambiente -eq 'A (NTFS)' } | Measure-Object Segundos -Average).Average
+    $mediaB = ($medicoes | Where-Object { $_.Ambiente -eq 'B (ReFS)' } | Measure-Object Segundos -Average).Average
+    $medicoesResult = Get-FasterEnvironment -SecondsA $mediaA -SecondsB $mediaB
+
+    Write-Host ''
+    Write-Host "Warmup: $($warmupResult.Faster) foi $($warmupResult.PercentFaster)% mais rapido." -ForegroundColor Blue
+    Write-Host "Medicoes: $($medicoesResult.Faster) foi $($medicoesResult.PercentFaster)% mais rapido." -ForegroundColor Blue
 }
 
 # --- Orquestracao ---
@@ -591,8 +671,8 @@ try {
     $envAPath = Initialize-EnvironmentCopy -Root $resolvedNtfsRoot -SourceInfo $sourceInfo -ProjectName $projectName -Label 'A (NTFS)'
     $envBPath = Initialize-EnvironmentCopy -Root $resolvedRefsRoot -SourceInfo $sourceInfo -ProjectName $projectName -Label 'B (ReFS)'
 
-    Write-Host "Ambiente A (NTFS): $envAPath"
-    Write-Host "Ambiente B (ReFS): $envBPath"
+    Write-Host "Ambiente A (NTFS): $envAPath" -ForegroundColor Blue
+    Write-Host "Ambiente B (ReFS): $envBPath" -ForegroundColor Blue
 
     Write-Stage 'Configurando o ambiente de build'
 
@@ -605,6 +685,7 @@ try {
     Write-Stage 'Resultados'
 
     Show-BenchmarkSummary -Samples $benchmarkResult.Samples
+    Write-BenchmarkConclusion -Samples $benchmarkResult.Samples
 }
 catch {
     Write-BenchmarkError -Stage $script:CurrentStage -ErrorRecord $_
