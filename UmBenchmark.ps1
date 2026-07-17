@@ -13,7 +13,11 @@ param(
 
     [string]$ConfigCommand = "java `"$PSScriptRoot\Ferramentas\CriarVariaveisEAbrirConsole.java`"",
 
-    [int]$Iterations = 5
+    [int]$Iterations = 5,
+
+    [string]$BuildCommand = 'mvn clean package',
+
+    [switch]$ShowBuildOutput
 )
 
 $ErrorActionPreference = 'Stop'
@@ -430,14 +434,61 @@ function Invoke-EmergencyCleanup {
     }
 }
 
-function Invoke-ProjectBuild {
+function Set-MavenRepoLocal {
+    param(
+        [Parameter(Mandatory)][string]$RepoPath
+    )
+
+    $current = $env:MAVEN_OPTS
+    $flag = "-Dmaven.repo.local=`"$RepoPath`""
+
+    if ($current -match '-Dmaven\.repo\.local=("[^"]*"|\S+)') {
+        $env:MAVEN_OPTS = $current -replace '-Dmaven\.repo\.local=("[^"]*"|\S+)', $flag
+    } elseif ([string]::IsNullOrWhiteSpace($current)) {
+        $env:MAVEN_OPTS = $flag
+    } else {
+        $env:MAVEN_OPTS = "$current $flag"
+    }
+}
+
+function Initialize-PackageCacheRedirection {
     param(
         [Parameter(Mandatory)][string]$ProjectPath
     )
 
+    $cacheRoot = Join-Path $ProjectPath '.cache-pacotes'
+    $npmCache = Join-Path $cacheRoot 'npm'
+    $denoCache = Join-Path $cacheRoot 'deno'
+    $mavenCache = Join-Path $cacheRoot 'maven'
+
+    New-Item -ItemType Directory -Path $npmCache, $denoCache, $mavenCache -Force | Out-Null
+
+    $env:NPM_CONFIG_CACHE = $npmCache
+    $env:DENO_DIR = $denoCache
+    Set-MavenRepoLocal -RepoPath $mavenCache
+}
+
+function Invoke-ProjectBuild {
+    param(
+        [Parameter(Mandatory)][string]$ProjectPath,
+        [Parameter(Mandatory)][string]$BuildCommand,
+        [switch]$ShowBuildOutput
+    )
+
+    Initialize-PackageCacheRedirection -ProjectPath $ProjectPath
+
     Write-Host "`tBuild: $ProjectPath"
 
-    Start-Sleep -Seconds 1
+    Push-Location -LiteralPath $ProjectPath
+    try {
+        if ($ShowBuildOutput) {
+            Invoke-Expression $BuildCommand | Write-Host
+        } else {
+            Invoke-Expression $BuildCommand | Out-Null
+        }
+    } finally {
+        Pop-Location
+    }
 }
 
 function Save-BenchmarkResults {
@@ -465,24 +516,26 @@ function Invoke-Benchmark {
         [Parameter(Mandatory)][string]$EnvAPath,
         [Parameter(Mandatory)][string]$EnvBPath,
         [Parameter(Mandatory)][int]$Iterations,
-        [Parameter(Mandatory)][string]$ResultsFolder
+        [Parameter(Mandatory)][string]$BuildCommand,
+        [Parameter(Mandatory)][string]$ResultsFolder,
+        [switch]$ShowBuildOutput
     )
 
     Write-Host "Warmup: preenchendo caches de dependencias em cada ambiente..."
-    Invoke-ProjectBuild -ProjectPath $EnvAPath
-    Invoke-ProjectBuild -ProjectPath $EnvBPath
+    Invoke-ProjectBuild -ProjectPath $EnvAPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput
+    Invoke-ProjectBuild -ProjectPath $EnvBPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput
 
     $samples = for ($i = 1; $i -le $Iterations; $i++) {
         Write-Host "Iteracao $i de $Iterations"
 
-        $elapsedA = Measure-Command { Invoke-ProjectBuild -ProjectPath $EnvAPath }
+        $elapsedA = Measure-Command { Invoke-ProjectBuild -ProjectPath $EnvAPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput }
         [pscustomobject]@{
             Ambiente = 'A (NTFS)'
             Iteracao = $i
             Millis   = [math]::Round($elapsedA.TotalMilliseconds, 2)
         }
 
-        $elapsedB = Measure-Command { Invoke-ProjectBuild -ProjectPath $EnvBPath }
+        $elapsedB = Measure-Command { Invoke-ProjectBuild -ProjectPath $EnvBPath -BuildCommand $BuildCommand -ShowBuildOutput:$ShowBuildOutput }
         [pscustomobject]@{
             Ambiente = 'B (ReFS)'
             Iteracao = $i
@@ -547,7 +600,7 @@ try {
 
     Write-Stage 'Executando benchmark'
 
-    $benchmarkResult = Invoke-Benchmark -EnvAPath $envAPath -EnvBPath $envBPath -Iterations $Iterations -ResultsFolder $ResultsFolderPath
+    $benchmarkResult = Invoke-Benchmark -EnvAPath $envAPath -EnvBPath $envBPath -Iterations $Iterations -BuildCommand $BuildCommand -ResultsFolder $ResultsFolderPath -ShowBuildOutput:$ShowBuildOutput
 
     Write-Stage 'Resultados'
 
