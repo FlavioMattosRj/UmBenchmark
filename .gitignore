@@ -23,3 +23,6 @@ Thumbs.db
 # Saidas geradas pelas ferramentas auxiliares
 Ferramentas/VarAmb.txt
 **/.cachepacotes/
+
+# Resultados de benchmark
+/Resultados/

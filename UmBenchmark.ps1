@@ -11,13 +11,16 @@ param(
     [Parameter(Mandatory)]
     [string]$Source,
 
-    [string]$ConfigCommand = "java `"$PSScriptRoot\Ferramentas\CriarVariaveisEAbrirConsole.java`""
+    [string]$ConfigCommand = "java `"$PSScriptRoot\Ferramentas\CriarVariaveisEAbrirConsole.java`"",
+
+    [int]$Iterations = 5
 )
 
 $ErrorActionPreference = 'Stop'
 
 $AutoRunToolPath = Join-Path $PSScriptRoot 'Ferramentas\DescarregarVariaveis.cmd'
 $CapturedEnvFilePath = Join-Path $PSScriptRoot 'Ferramentas\VarAmb.txt'
+$ResultsFolderPath = Join-Path $PSScriptRoot 'Resultados'
 $script:CurrentStage = 'Inicializacao'
 
 function Assert-DirectoryRoot {
@@ -381,6 +384,9 @@ function Initialize-BuildConfiguration {
     Import-CapturedEnvironment -Path $CapturedEnvFile
 
     Close-RecentCmdConsoles
+
+    Remove-Item -LiteralPath $CapturedEnvFile -Force
+    Write-Host "Arquivo de variaveis removido: $CapturedEnvFile"
 }
 
 function Write-Stage {
@@ -424,6 +430,96 @@ function Invoke-EmergencyCleanup {
     }
 }
 
+function Invoke-ProjectBuild {
+    param(
+        [Parameter(Mandatory)][string]$ProjectPath
+    )
+
+    Write-Host "`tBuild: $ProjectPath"
+
+    Start-Sleep -Seconds 1
+}
+
+function Save-BenchmarkResults {
+    param(
+        [Parameter(Mandatory)][object[]]$Samples,
+        [Parameter(Mandatory)][string]$ResultsFolder
+    )
+
+    if (-not (Test-Path -LiteralPath $ResultsFolder)) {
+        New-Item -ItemType Directory -Path $ResultsFolder -Force | Out-Null
+    }
+
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $csvPath = Join-Path $ResultsFolder "Resultados_$timestamp.csv"
+
+    $Samples | Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8
+
+    Write-Host "Resultados salvos em: $csvPath"
+
+    return $csvPath
+}
+
+function Invoke-Benchmark {
+    param(
+        [Parameter(Mandatory)][string]$EnvAPath,
+        [Parameter(Mandatory)][string]$EnvBPath,
+        [Parameter(Mandatory)][int]$Iterations,
+        [Parameter(Mandatory)][string]$ResultsFolder
+    )
+
+    Write-Host "Warmup: preenchendo caches de dependencias em cada ambiente..."
+    Invoke-ProjectBuild -ProjectPath $EnvAPath
+    Invoke-ProjectBuild -ProjectPath $EnvBPath
+
+    $samples = for ($i = 1; $i -le $Iterations; $i++) {
+        Write-Host "Iteracao $i de $Iterations"
+
+        $elapsedA = Measure-Command { Invoke-ProjectBuild -ProjectPath $EnvAPath }
+        [pscustomobject]@{
+            Ambiente = 'A (NTFS)'
+            Iteracao = $i
+            Millis   = [math]::Round($elapsedA.TotalMilliseconds, 2)
+        }
+
+        $elapsedB = Measure-Command { Invoke-ProjectBuild -ProjectPath $EnvBPath }
+        [pscustomobject]@{
+            Ambiente = 'B (ReFS)'
+            Iteracao = $i
+            Millis   = [math]::Round($elapsedB.TotalMilliseconds, 2)
+        }
+    }
+
+    $csvPath = Save-BenchmarkResults -Samples $samples -ResultsFolder $ResultsFolder
+
+    return [pscustomobject]@{
+        Samples = $samples
+        CsvPath = $csvPath
+    }
+}
+
+function Show-BenchmarkSummary {
+    param(
+        [Parameter(Mandatory)][object[]]$Samples
+    )
+
+    Write-Host ''
+    Write-Host 'Resumo do benchmark:' -ForegroundColor Green
+
+    $Samples | Group-Object Ambiente | ForEach-Object {
+        $stats = $_.Group.Millis | Measure-Object -Average -Minimum -Maximum -StandardDeviation
+
+        [pscustomobject]@{
+            Ambiente        = $_.Name
+            Iteracoes       = $_.Group.Count
+            MediaMs         = [math]::Round($stats.Average, 2)
+            DesvioPadraoMs  = [math]::Round($stats.StandardDeviation, 2)
+            MinimoMs        = [math]::Round($stats.Minimum, 2)
+            MaximoMs        = [math]::Round($stats.Maximum, 2)
+        }
+    } | Format-Table -AutoSize
+}
+
 # --- Orquestracao ---
 
 try {
@@ -449,8 +545,13 @@ try {
 
     Initialize-BuildConfiguration -ProjectRoot $envAPath -ConfigCommand $ConfigCommand -AutoRunToolPath $AutoRunToolPath -CapturedEnvFile $CapturedEnvFilePath
 
-    Remove-Item -LiteralPath $CapturedEnvFilePath -Force
-    Write-Host "Arquivo de variaveis removido: $CapturedEnvFilePath"
+    Write-Stage 'Executando benchmark'
+
+    $benchmarkResult = Invoke-Benchmark -EnvAPath $envAPath -EnvBPath $envBPath -Iterations $Iterations -ResultsFolder $ResultsFolderPath
+
+    Write-Stage 'Resultados'
+
+    Show-BenchmarkSummary -Samples $benchmarkResult.Samples
 }
 catch {
     Write-BenchmarkError -Stage $script:CurrentStage -ErrorRecord $_
