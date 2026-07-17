@@ -305,7 +305,9 @@ function Import-CapturedEnvironment {
         [Parameter(Mandatory)][string]$Path
     )
 
-    foreach ($line in Get-Content -LiteralPath $Path -Encoding OEM) {
+    foreach ($rawLine in Get-Content -LiteralPath $Path -Encoding OEM) {
+        $line = $rawLine -replace '[\x00-\x08\x0b\x0c\x0e-\x1f]', ''
+
         if ([string]::IsNullOrWhiteSpace($line)) {
             continue
         }
