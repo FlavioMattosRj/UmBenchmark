@@ -66,7 +66,9 @@ Quando você roda `UmBenchmark.ps1`, ele passa por estágios nomeados (anunciado
 
 - Todas as medições (warmup **e** iterações) são listadas individualmente no console e salvas em `Resultados\Resultados_AAAAMMDD_HHMMSS.csv`.
 - É calculada e exibida a média, desvio padrão, mínimo e máximo por ambiente — **excluindo o warmup** desse cálculo (ele existe só para aquecer o cache, não para ser comparado).
-- Por fim, uma conclusão indica qual ambiente foi mais rápido e por quantos %, separadamente para o warmup e para as iterações medidas.
+- Em seguida, uma conclusão indica qual ambiente foi mais rápido e por quantos %, separadamente para o warmup e para as iterações medidas.
+- Cada iteração medida é analisada com o método do intervalo interquartil (IQR/cercas de Tukey), por ambiente, para identificar **outliers** — medições anormalmente lentas ou rápidas (comuns quando o Windows Defender, o indexador de busca ou outro processo em segundo plano concorrem por I/O bem no meio de um build). Essa marcação aparece na listagem individual e no CSV (coluna `Outlier`).
+- Por fim, numa seção separada e claramente destacada (`=== Resultados SEM OUTLIERS ===`), o mesmo resumo (média, desvio padrão, mínimo, máximo) e o mesmo percentual comparativo são recalculados **excluindo** as medições marcadas como outlier — para que picos esporádicos não mascarem a comparação real entre os dois sistemas de arquivos. Os outliers removidos são listados nominalmente, nunca escondidos silenciosamente.
 
 ## Fonte padrão (quando `-Source` não é informado)
 

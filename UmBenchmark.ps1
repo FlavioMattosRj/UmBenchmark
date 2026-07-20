@@ -612,12 +612,74 @@ function Invoke-Benchmark {
         }
     )
 
+    $samples = Add-OutlierFlags -Samples $samples
+
     $csvPath = Save-BenchmarkResults -Samples $samples -ResultsFolder $ResultsFolder
 
     return [pscustomobject]@{
         Samples = $samples
         CsvPath = $csvPath
     }
+}
+
+function Get-Percentile {
+    param(
+        [Parameter(Mandatory)][double[]]$SortedValues,
+        [Parameter(Mandatory)][double]$Percentile
+    )
+
+    $n = $SortedValues.Count
+    if ($n -eq 1) {
+        return $SortedValues[0]
+    }
+
+    $rank = ($Percentile / 100) * ($n - 1)
+    $lowerIndex = [math]::Floor($rank)
+    $upperIndex = [math]::Ceiling($rank)
+
+    if ($lowerIndex -eq $upperIndex) {
+        return $SortedValues[$lowerIndex]
+    }
+
+    $weight = $rank - $lowerIndex
+    return $SortedValues[$lowerIndex] + ($SortedValues[$upperIndex] - $SortedValues[$lowerIndex]) * $weight
+}
+
+function Get-OutlierBounds {
+    param(
+        [Parameter(Mandatory)][double[]]$Values
+    )
+
+    $sorted = $Values | Sort-Object
+    $q1 = Get-Percentile -SortedValues $sorted -Percentile 25
+    $q3 = Get-Percentile -SortedValues $sorted -Percentile 75
+    $iqr = $q3 - $q1
+
+    return [pscustomobject]@{
+        LowerBound = $q1 - 1.5 * $iqr
+        UpperBound = $q3 + 1.5 * $iqr
+    }
+}
+
+function Add-OutlierFlags {
+    param(
+        [Parameter(Mandatory)][object[]]$Samples
+    )
+
+    $Samples | Where-Object { $_.Rodada -ne 'Warmup' } | Group-Object Ambiente | ForEach-Object {
+        $bounds = Get-OutlierBounds -Values $_.Group.Segundos
+
+        foreach ($sample in $_.Group) {
+            $isOutlier = $sample.Segundos -lt $bounds.LowerBound -or $sample.Segundos -gt $bounds.UpperBound
+            $sample | Add-Member -NotePropertyName 'Outlier' -NotePropertyValue $isOutlier -Force
+        }
+    }
+
+    foreach ($sample in ($Samples | Where-Object { $_.Rodada -eq 'Warmup' })) {
+        $sample | Add-Member -NotePropertyName 'Outlier' -NotePropertyValue $false -Force
+    }
+
+    return $Samples
 }
 
 function Show-BenchmarkSummary {
@@ -690,6 +752,46 @@ function Write-BenchmarkConclusion {
     Write-Host "Medicoes: $($medicoesResult.Faster) foi $($medicoesResult.PercentFaster)% mais rapido." -ForegroundColor Blue
 }
 
+function Show-BenchmarkSummaryWithoutOutliers {
+    param(
+        [Parameter(Mandatory)][object[]]$Samples
+    )
+
+    $semOutliers = $Samples | Where-Object { $_.Rodada -ne 'Warmup' -and -not $_.Outlier }
+    $outliers = $Samples | Where-Object { $_.Rodada -ne 'Warmup' -and $_.Outlier }
+
+    Write-Host ''
+    Write-Host '=========================================' -ForegroundColor Blue
+    Write-Host '=== Resultados SEM OUTLIERS (medicoes) ===' -ForegroundColor Blue
+    Write-Host '=========================================' -ForegroundColor Blue
+
+    if ($outliers.Count -eq 0) {
+        Write-Host 'Nenhum outlier detectado.' -ForegroundColor Blue
+    } else {
+        Write-Host "Outliers removidos ($($outliers.Count)):" -ForegroundColor Blue
+        $outliers | Format-Table -AutoSize
+    }
+
+    $semOutliers | Group-Object Ambiente | ForEach-Object {
+        $stats = $_.Group.Segundos | Measure-Object -Average -Minimum -Maximum -StandardDeviation
+
+        [pscustomobject]@{
+            Ambiente             = $_.Name
+            Iteracoes            = $_.Group.Count
+            MediaSegundos        = [math]::Round($stats.Average, 2)
+            DesvioPadraoSegundos = [math]::Round($stats.StandardDeviation, 2)
+            MinimoSegundos       = [math]::Round($stats.Minimum, 2)
+            MaximoSegundos       = [math]::Round($stats.Maximum, 2)
+        }
+    } | Format-Table -AutoSize
+
+    $mediaA = ($semOutliers | Where-Object { $_.Ambiente -eq 'A (NTFS)' } | Measure-Object Segundos -Average).Average
+    $mediaB = ($semOutliers | Where-Object { $_.Ambiente -eq 'B (ReFS)' } | Measure-Object Segundos -Average).Average
+    $result = Get-FasterEnvironment -SecondsA $mediaA -SecondsB $mediaB
+
+    Write-Host "Medicoes (sem outliers): $($result.Faster) foi $($result.PercentFaster)% mais rapido." -ForegroundColor Blue
+}
+
 # --- Orquestracao ---
 
 try {
@@ -728,6 +830,7 @@ try {
 
     Show-BenchmarkSummary -Samples $benchmarkResult.Samples
     Write-BenchmarkConclusion -Samples $benchmarkResult.Samples
+    Show-BenchmarkSummaryWithoutOutliers -Samples $benchmarkResult.Samples
 }
 catch {
     Write-BenchmarkError -Stage $script:CurrentStage -ErrorRecord $_
