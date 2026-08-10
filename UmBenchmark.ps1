@@ -509,11 +509,13 @@ function Initialize-PackageCacheRedirection {
     $npmCache = Join-Path $cacheRoot 'npm'
     $denoCache = Join-Path $cacheRoot 'deno'
     $mavenCache = Join-Path $cacheRoot 'maven'
+    $yarnCache = Join-Path $cacheRoot 'yarn'
 
-    New-Item -ItemType Directory -Path $npmCache, $denoCache, $mavenCache -Force | Out-Null
+    New-Item -ItemType Directory -Path $npmCache, $denoCache, $mavenCache, $yarnCache -Force | Out-Null
 
     $env:NPM_CONFIG_CACHE = $npmCache
     $env:DENO_DIR = $denoCache
+    $env:YARN_CACHE_FOLDER = $yarnCache
     Set-MavenRepoLocal -RepoPath $mavenCache
 }
 

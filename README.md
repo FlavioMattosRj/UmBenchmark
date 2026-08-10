@@ -59,7 +59,7 @@ Quando você roda `UmBenchmark.ps1`, ele passa por estágios nomeados (anunciado
 
 - **Warmup**: uma execução do build em cada ambiente (A depois B), só para preencher caches de dependências (Maven, npm, Deno) — sem essa etapa, o primeiro build medido seria injustamente mais lento.
 - **Iterações medidas**: `-Iterations` rodadas, cada uma alternando um build em A e um em B, com o tempo de cada uma cronometrado.
-- Antes de cada build, o cache de pacotes (`.cache-pacotes/{npm,deno,maven}`) é redirecionado para dentro da própria cópia do projeto — assim os artefatos baixados ficam no mesmo sistema de arquivos sendo medido, e não em um cache global compartilhado que mascararia a diferença.
+- Antes de cada build, o cache de pacotes (`.cache-pacotes/{npm,deno,maven,yarn}`) é redirecionado para dentro da própria cópia do projeto — assim os artefatos baixados ficam no mesmo sistema de arquivos sendo medido, e não em um cache global compartilhado que mascararia a diferença.
 - O comando de build (`-BuildCommand`) é executado de verdade a partir da pasta do projeto. Por padrão, é um build limpo (`mvn clean package`), forçando recompilação total a cada iteração.
 
 ### 5. Resultados
